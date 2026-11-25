@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { 
   Filter, 
   Search, 
@@ -9,11 +10,21 @@ import {
   Compass, 
   Info,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Satellite,
+  Map as MapIcon
 } from 'lucide-react';
 import { usePollution } from '../../context/PollutionContext';
 import { PollutionObservation, SeverityLevel } from '../../types/pollution';
 import { SeverityBadge, ProvenanceBadge } from '../common/Badge';
+
+// Fix Leaflet default icon paths broken by Vite bundling
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
 
 interface PollutionMapProps {
   onOpenDetails: (location: PollutionObservation) => void;
@@ -24,6 +35,22 @@ export const PollutionMap: React.FC<PollutionMapProps> = ({ onOpenDetails, onMap
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
+  const baseLayerRef = useRef<L.TileLayer | null>(null);
+  const labelsLayerRef = useRef<L.TileLayer | null>(null);
+
+  const [mapStyle, setMapStyle] = useState<'satellite' | 'street'>('satellite');
+
+  // Stable refs for callbacks so the map init useEffect can use [] deps
+  const onMapCoordinateClickRef = useRef(onMapCoordinateClick);
+  const onOpenDetailsRef = useRef(onOpenDetails);
+
+  useEffect(() => {
+    onMapCoordinateClickRef.current = onMapCoordinateClick;
+  }, [onMapCoordinateClick]);
+
+  useEffect(() => {
+    onOpenDetailsRef.current = onOpenDetails;
+  }, [onOpenDetails]);
 
   const {
     filteredObservations,
@@ -52,7 +79,7 @@ export const PollutionMap: React.FC<PollutionMapProps> = ({ onOpenDetails, onMap
     }
   };
 
-  // Initialize Map
+  // Initialize Map — runs once on mount
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
@@ -69,29 +96,104 @@ export const PollutionMap: React.FC<PollutionMapProps> = ({ onOpenDetails, onMap
       // Add Zoom Control at bottom right
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-      // Clean tile layer - OpenStreetMap CartoDB Positron style
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 20
-      }).addTo(map);
+      // Default to real Satellite Imagery with Boundaries & Places labels
+      const satelliteLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        {
+          attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+          maxZoom: 19,
+        }
+      ).addTo(map);
+
+      const labelsLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+        {
+          maxZoom: 19,
+          pane: 'overlayPane',
+        }
+      ).addTo(map);
+
+      baseLayerRef.current = satelliteLayer;
+      labelsLayerRef.current = labelsLayer;
 
       const markersGroup = L.layerGroup().addTo(map);
       markersLayerRef.current = markersGroup;
       mapInstanceRef.current = map;
 
-      // Handle map clicks for coordinate selection
+      // Handle map clicks for coordinate selection (uses ref for stable callback)
       map.on('click', (e: L.LeafletMouseEvent) => {
-        if (onMapCoordinateClick) {
-          onMapCoordinateClick(Number(e.latlng.lat.toFixed(4)), Number(e.latlng.lng.toFixed(4)));
+        if (onMapCoordinateClickRef.current) {
+          onMapCoordinateClickRef.current(Number(e.latlng.lat.toFixed(4)), Number(e.latlng.lng.toFixed(4)));
         }
       });
+
+      // Fix grey/blank tiles on initial load (especially on GitHub Pages)
+      setTimeout(() => map.invalidateSize(), 100);
+
+      // Fix grey/blank tiles on window resize
+      const handleResize = () => map.invalidateSize();
+      window.addEventListener('resize', handleResize);
+
+      // Store resize handler for cleanup
+      (map as any)._resizeHandler = handleResize;
     }
 
     return () => {
-      // Optional cleanup if component entirely unmounts
+      if (mapInstanceRef.current) {
+        const map = mapInstanceRef.current;
+        const handleResize = (map as any)._resizeHandler;
+        if (handleResize) {
+          window.removeEventListener('resize', handleResize);
+        }
+        map.remove();
+        mapInstanceRef.current = null;
+        markersLayerRef.current = null;
+        baseLayerRef.current = null;
+        labelsLayerRef.current = null;
+      }
     };
-  }, [onMapCoordinateClick]);
+  }, []);
+
+  // Switch between Satellite and Street base layers
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (baseLayerRef.current) {
+      map.removeLayer(baseLayerRef.current);
+      baseLayerRef.current = null;
+    }
+    if (labelsLayerRef.current) {
+      map.removeLayer(labelsLayerRef.current);
+      labelsLayerRef.current = null;
+    }
+
+    if (mapStyle === 'satellite') {
+      baseLayerRef.current = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        {
+          attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+          maxZoom: 19,
+        }
+      ).addTo(map);
+
+      labelsLayerRef.current = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+        {
+          maxZoom: 19,
+          pane: 'overlayPane',
+        }
+      ).addTo(map);
+    } else {
+      baseLayerRef.current = L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          maxZoom: 19,
+        }
+      ).addTo(map);
+    }
+  }, [mapStyle]);
 
   // Update Markers when filtered observations change
   useEffect(() => {
@@ -158,14 +260,14 @@ export const PollutionMap: React.FC<PollutionMapProps> = ({ onOpenDetails, onMap
         </button>
       `;
 
-      // Attach button listener after popup opens
+      // Attach button listener after popup opens (uses ref for stable callback)
       marker.bindPopup(popupContent);
       marker.on('popupopen', () => {
         const btn = document.getElementById(`inspect-btn-${obs.id}`);
         if (btn) {
           btn.onclick = () => {
             setSelectedLocation(obs);
-            onOpenDetails(obs);
+            onOpenDetailsRef.current(obs);
           };
         }
       });
@@ -176,7 +278,7 @@ export const PollutionMap: React.FC<PollutionMapProps> = ({ onOpenDetails, onMap
 
       markersGroup.addLayer(marker);
     });
-  }, [filteredObservations, onOpenDetails, setSelectedLocation]);
+  }, [filteredObservations, setSelectedLocation]);
 
   // Center map when selected location changes
   const handleFlyToLocation = (loc: PollutionObservation) => {
@@ -251,6 +353,34 @@ export const PollutionMap: React.FC<PollutionMapProps> = ({ onOpenDetails, onMap
               </select>
             </div>
 
+            {/* Map View Switcher (Satellite / Street) */}
+            <div className="bg-white/95 backdrop-blur-md rounded-xl shadow-md border border-slate-200/80 p-1 flex items-center gap-1 text-xs shrink-0">
+              <button
+                onClick={() => setMapStyle('satellite')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  mapStyle === 'satellite'
+                    ? 'bg-ocean-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+                title="Satellite Imagery View"
+              >
+                <Satellite className="w-3.5 h-3.5" />
+                Satellite
+              </button>
+              <button
+                onClick={() => setMapStyle('street')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  mapStyle === 'street'
+                    ? 'bg-ocean-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+                title="Standard Street Map View"
+              >
+                <MapIcon className="w-3.5 h-3.5" />
+                Street
+              </button>
+            </div>
+
             {/* Hotspots Quick Toggle */}
             <button
               onClick={() => setShowHotspotsOnly(!showHotspotsOnly)}
@@ -320,13 +450,15 @@ export const PollutionMap: React.FC<PollutionMapProps> = ({ onOpenDetails, onMap
 
         <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
           <span>Click any marker to inspect</span>
-          <span className="text-ocean-600 font-bold">OSM Basemap</span>
+          <span className="text-ocean-600 font-bold">
+            {mapStyle === 'satellite' ? 'Esri Satellite' : 'OpenStreetMap'}
+          </span>
         </div>
       </div>
 
       {/* Quick Location Preview Drawer (Bottom Center / Right on desktop) */}
       {selectedLocation && (
-        <div className="hidden lg:block absolute bottom-6 right-6 z-20 w-80 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200/90 p-4 transition-all animate-in slide-in-from-bottom-3 pointer-events-auto">
+        <div className="hidden lg:block absolute bottom-6 right-16 z-20 w-80 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200/90 p-4 transition-all animate-in slide-in-from-bottom-3 pointer-events-auto">
           <div className="flex items-start justify-between gap-2">
             <div>
               <div className="flex items-center gap-1.5 mb-1">

@@ -78,8 +78,17 @@ export interface FilterState {
   yearRange: [number, number];
 }
 
+export type CommunityReportStatus = 
+  | 'pending_review' 
+  | 'under_review' 
+  | 'verified' 
+  | 'cleanup_scheduled' 
+  | 'resolved' 
+  | 'flagged';
+
 export interface CommunityReport {
   id: string;
+  userId?: string;
   locationName: string;
   waterbodyType: WaterbodyType;
   coordinates: [number, number];
@@ -92,8 +101,12 @@ export interface CommunityReport {
   reporterName: string;
   reporterEmail?: string;
   photoUrl?: string;
-  status: 'pending_review' | 'verified' | 'flagged';
+  status: CommunityReportStatus;
   submittedAt: string;
+  reviewedByNgoId?: string;
+  reviewedByNgoName?: string;
+  reviewNotes?: string;
+  updatedAt?: string;
 }
 
 export interface LocationComparisonItem {

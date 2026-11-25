@@ -1,38 +1,40 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { 
   X, 
   Upload, 
   MapPin, 
-  Calendar, 
-  Clock, 
-  ShieldAlert, 
+  Clock,
   CheckCircle2, 
-  Image as ImageIcon, 
   AlertCircle,
   Check,
-  Eye,
-  Sliders,
-  Sparkles
+  Sparkles,
+  Lock,
+  User,
+  FileText
 } from 'lucide-react';
 import { usePollution } from '../../context/PollutionContext';
-import { WaterbodyType, PlasticWasteCategory, SeverityLevel } from '../../types/pollution';
+import { useAuth } from '../../context/AuthContext';
+import { WaterbodyType, PlasticWasteCategory, SeverityLevel, CommunityReportStatus } from '../../types/pollution';
 import { SeverityBadge } from '../common/Badge';
 
 interface CommunityReportModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialCoordinates?: [number, number] | null;
+  onTriggerAuth?: (reason: string) => void;
 }
 
 export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
   isOpen,
   onClose,
   initialCoordinates,
+  onTriggerAuth,
 }) => {
   const { submitCommunityReport, communityReports, verifyCommunityReport } = usePollution();
+  const { isAuthenticated, currentUser, userProfile, isNgo, ngoProfile, quickLoginDemo } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'submit' | 'queue'>('submit');
+  const [activeTab, setActiveTab] = useState<'submit' | 'my_reports' | 'queue'>('submit');
 
   // Form State
   const [locationName, setLocationName] = useState('');
@@ -45,14 +47,30 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
   const [estimatedPieces, setEstimatedPieces] = useState(45);
   const [severity, setSeverity] = useState<SeverityLevel>('Moderate');
   const [description, setDescription] = useState('');
-  const [reporterName, setReporterName] = useState('');
-  const [reporterEmail, setReporterEmail] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [antiSpamConfirmed, setAntiSpamConfirmed] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Auto-fill reporter identity from authenticated user
+  const reporterName = userProfile ? userProfile.fullName : ngoProfile ? ngoProfile.orgName : '';
+  const reporterEmail = userProfile ? userProfile.email : ngoProfile ? ngoProfile.officialEmail : '';
+
+  useEffect(() => {
+    if (initialCoordinates) {
+      setLat(initialCoordinates[0].toFixed(4));
+      setLng(initialCoordinates[1].toFixed(4));
+    }
+  }, [initialCoordinates]);
+
   if (!isOpen) return null;
+
+  // Filter reports submitted by current user
+  const myReports = communityReports.filter(
+    (r) =>
+      (currentUser && r.userId === currentUser.id) ||
+      (reporterEmail && r.reporterEmail && r.reporterEmail.toLowerCase() === reporterEmail.toLowerCase())
+  );
 
   // Handle image upload with local FileReader
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -79,7 +97,7 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
           setLat(pos.coords.latitude.toFixed(4));
           setLng(pos.coords.longitude.toFixed(4));
         },
-        (err) => {
+        () => {
           setErrorMsg('Unable to retrieve device GPS coordinates. Please enter manually.');
         }
       );
@@ -89,6 +107,11 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+
+    if (!isAuthenticated || !currentUser) {
+      setErrorMsg('You must be logged in to submit a pollution report.');
+      return;
+    }
 
     if (!locationName.trim()) {
       setErrorMsg('Please enter a location name.');
@@ -107,17 +130,13 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
       return;
     }
 
-    if (!reporterName.trim()) {
-      setErrorMsg('Please enter your name or organization.');
-      return;
-    }
-
     if (!antiSpamConfirmed) {
       setErrorMsg('Please confirm the observation statement for scientific integrity.');
       return;
     }
 
     submitCommunityReport({
+      userId: currentUser.id,
       locationName: locationName.trim(),
       waterbodyType,
       coordinates: [numLat, numLng],
@@ -127,8 +146,8 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
       estimatedPieces: Number(estimatedPieces),
       severity,
       description: description.trim(),
-      reporterName: reporterName.trim(),
-      reporterEmail: reporterEmail.trim() || undefined,
+      reporterName: reporterName || 'Anonymous Citizen',
+      reporterEmail: reporterEmail || undefined,
       photoUrl: photoPreview || undefined,
     });
 
@@ -141,8 +160,48 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
 
     setTimeout(() => {
       setIsSuccess(false);
-      onClose();
-    }, 2000);
+      setActiveTab('my_reports');
+    }, 1800);
+  };
+
+  const getStatusBadge = (status: CommunityReportStatus) => {
+    switch (status) {
+      case 'verified':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800 border border-teal-200">
+            <CheckCircle2 className="w-3 h-3 text-teal-600" />
+            Verified Audit
+          </span>
+        );
+      case 'cleanup_scheduled':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+            <Sparkles className="w-3 h-3 text-blue-600" />
+            Cleanup Scheduled
+          </span>
+        );
+      case 'resolved':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+            <Check className="w-3 h-3 text-emerald-600" />
+            Debris Resolved
+          </span>
+        );
+      case 'under_review':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+            <Clock className="w-3 h-3 text-indigo-600" />
+            Under NGO Review
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+            <Clock className="w-3 h-3 text-amber-600" />
+            Pending Review
+          </span>
+        );
+    }
   };
 
   return (
@@ -154,11 +213,17 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
         {/* Modal Header */}
         <div className="p-6 border-b border-slate-100 flex items-center justify-between gap-4 bg-gradient-to-r from-slate-50 to-marine-50/40">
           <div>
-            <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase font-extrabold tracking-wider px-2 py-0.5 rounded-full bg-ocean-100 text-ocean-800">
+                Citizen Science
+              </span>
+              <span className="text-xs text-slate-500 font-medium">Environmental Rigor</span>
+            </div>
+            <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight mt-0.5">
               Community Pollution Watch
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Citizen science monitoring network for coastal and freshwater plastic tracking
+              Report marine and freshwater plastic debris to mobilize regional cleanups
             </p>
           </div>
 
@@ -182,6 +247,24 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
           >
             Submit New Observation
           </button>
+
+          {isAuthenticated && (
+            <button
+              onClick={() => setActiveTab('my_reports')}
+              className={`pb-3 text-xs font-bold transition-colors border-b-2 flex items-center gap-1.5 ${
+                activeTab === 'my_reports'
+                  ? 'border-ocean-600 text-ocean-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>My Previous Reports</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-ocean-100 text-ocean-800 font-bold">
+                {myReports.length}
+              </span>
+            </button>
+          )}
+
           <button
             onClick={() => setActiveTab('queue')}
             className={`pb-3 text-xs font-bold transition-colors border-b-2 flex items-center gap-1.5 ${
@@ -190,8 +273,8 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            <span>Review & Moderation Queue</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-ocean-100 text-ocean-800">
+            <span>All Recent Reports</span>
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-700 font-bold">
               {communityReports.length}
             </span>
           </button>
@@ -200,19 +283,80 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
         {/* Modal Content */}
         <div className="p-6 overflow-y-auto">
           {activeTab === 'submit' ? (
-            isSuccess ? (
+            /* AUTHENTICATION GATE CHECK */
+            !isAuthenticated ? (
+              <div className="py-8 px-4 text-center space-y-4">
+                <div className="w-16 h-16 rounded-3xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-sm">
+                  <Lock className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-black text-slate-900 tracking-tight">
+                    Account Required to Submit a Report
+                  </h3>
+                  <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                    To preserve open science integrity and prevent spam, users must be logged in before submitting pollution reports. Visitors can freely explore the website without an account.
+                  </p>
+                </div>
+
+                <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <button
+                    onClick={() => {
+                      onClose();
+                      if (onTriggerAuth) {
+                        onTriggerAuth('Please sign in or create an account to submit your pollution observation.');
+                      }
+                    }}
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-extrabold text-white bg-gradient-to-r from-ocean-600 to-marine-600 hover:from-ocean-700 hover:to-marine-700 shadow-md shadow-ocean-600/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    <User className="w-4 h-4" />
+                    <span>Login / Sign Up to Report</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      quickLoginDemo('user');
+                      confetti({ particleCount: 50, spread: 60, origin: { y: 0.6 } });
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-bold text-ocean-800 bg-ocean-50 hover:bg-ocean-100 border border-ocean-200 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                    <span>1-Click Test Login as Elena</span>
+                  </button>
+                </div>
+
+                <div className="pt-4 border-t border-slate-100 text-[11px] text-slate-400">
+                  Are you an environmental NGO? Organizations have a dedicated review portal.
+                </div>
+              </div>
+            ) : isSuccess ? (
               <div className="py-12 text-center space-y-4">
                 <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
                   <CheckCircle2 className="w-8 h-8" />
                 </div>
                 <h3 className="text-xl font-black text-slate-900">Observation Submitted!</h3>
                 <p className="text-xs text-slate-600 max-w-sm mx-auto leading-relaxed">
-                  Thank you for contributing to open environmental science. Your report is now visible on the map marked as <strong>Citizen Unverified</strong> while regional moderators review it.
+                  Thank you, <strong>{reporterName}</strong>. Your observation has been logged to your account and submitted to accredited regional NGOs for verification.
                 </p>
               </div>
             ) : (
-              <form onSubmit={handleSubmit} className="space-y-5">
+              <form onSubmit={handleSubmit} className="space-y-4">
                 
+                {/* Authenticated Observer Banner */}
+                <div className="p-3 bg-ocean-50/70 border border-ocean-200/80 rounded-2xl flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-ocean-600 text-white flex items-center justify-center font-bold text-xs">
+                      {reporterName.charAt(0)}
+                    </div>
+                    <div>
+                      <span className="font-extrabold text-slate-900 block">{reporterName}</span>
+                      <span className="text-[11px] text-slate-500">{reporterEmail}</span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-bold text-ocean-800 bg-ocean-100 px-2 py-0.5 rounded-full border border-ocean-200">
+                    Verified Observer
+                  </span>
+                </div>
+
                 {errorMsg && (
                   <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
@@ -356,12 +500,12 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
 
                 {/* Description */}
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700">Observation Notes *</label>
+                  <label className="text-xs font-bold text-slate-700">Observation Description *</label>
                   <textarea
                     rows={2}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Describe specific items found, tidal state, recent rainfall or runoff, and environmental impact..."
+                    placeholder="Describe specific items found, tidal driftline state, weather impact..."
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-ocean-500"
                     required
                   />
@@ -400,32 +544,6 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
                   </div>
                 </div>
 
-                {/* Observer Details & Anti-Spam */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700">Reporter / Organization *</label>
-                    <input
-                      type="text"
-                      value={reporterName}
-                      onChange={(e) => setReporterName(e.target.value)}
-                      placeholder="Your name or citizen group"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900"
-                      required
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700">Email (Optional, Private)</label>
-                    <input
-                      type="email"
-                      value={reporterEmail}
-                      onChange={(e) => setReporterEmail(e.target.value)}
-                      placeholder="For verification follow-up only"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900"
-                    />
-                  </div>
-                </div>
-
                 {/* Anti-spam integrity check */}
                 <div className="flex items-start gap-2.5 bg-slate-50 p-3 rounded-xl border border-slate-200/80">
                   <input
@@ -436,7 +554,7 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
                     className="mt-0.5 rounded text-ocean-600 focus:ring-ocean-500"
                   />
                   <label htmlFor="anti-spam" className="text-[11px] text-slate-600 leading-snug cursor-pointer">
-                    I confirm that this report reflects a genuine personal environmental observation. I acknowledge it will be labeled as <strong>Citizen Unverified</strong> until validated by regional moderators.
+                    I confirm this report reflects my personal environmental observation. I understand it will be submitted to regional NGOs for verification and cleanup coordination.
                   </label>
                 </div>
 
@@ -444,21 +562,75 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
                 <div className="pt-2">
                   <button
                     type="submit"
-                    className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-marine-600 to-ocean-600 hover:from-marine-700 hover:to-ocean-700 shadow-md shadow-ocean-600/20 transition-all active:scale-[0.99]"
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-extrabold text-white bg-gradient-to-r from-marine-600 to-ocean-600 hover:from-marine-700 hover:to-ocean-700 shadow-md shadow-ocean-600/20 transition-all active:scale-[0.99]"
                   >
-                    Submit Community Report to Open Map
+                    Submit Pollution Report
                   </button>
                 </div>
 
               </form>
             )
+          ) : activeTab === 'my_reports' ? (
+            /* MY PREVIOUS REPORTS TAB */
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs text-slate-500">
+                <span>My Submitted Observations ({myReports.length})</span>
+                <span className="text-[11px] font-semibold text-ocean-700 bg-ocean-50 px-2 py-0.5 rounded">
+                  Status & Audit History
+                </span>
+              </div>
+
+              {myReports.length === 0 ? (
+                <div className="py-8 text-center text-xs text-slate-500">
+                  You haven't submitted any reports yet. Use the "Submit New Observation" tab above!
+                </div>
+              ) : (
+                myReports.map((report) => (
+                  <div
+                    key={report.id}
+                    className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 space-y-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          {getStatusBadge(report.status)}
+                          <SeverityBadge severity={report.severity} />
+                        </div>
+                        <h4 className="font-black text-sm text-slate-900">{report.locationName}</h4>
+                        <p className="text-xs text-slate-500">
+                          {report.date} at {report.time} • [{report.coordinates[0].toFixed(3)}, {report.coordinates[1].toFixed(3)}]
+                        </p>
+                      </div>
+
+                      {report.photoUrl && (
+                        <img
+                          src={report.photoUrl}
+                          alt={report.locationName}
+                          className="w-14 h-14 object-cover rounded-xl border border-slate-200 shrink-0"
+                        />
+                      )}
+                    </div>
+
+                    <p className="text-xs text-slate-600 bg-white p-3 rounded-xl border border-slate-100">
+                      {report.description}
+                    </p>
+
+                    {report.reviewNotes && (
+                      <div className="p-2.5 rounded-xl bg-teal-50 border border-teal-200 text-[11px] text-teal-900">
+                        <strong>NGO Review Note:</strong> {report.reviewNotes}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
           ) : (
-            /* Moderation Queue Tab */
+            /* ALL RECENT REPORTS TAB */
             <div className="space-y-4">
               <div className="flex items-center justify-between text-xs text-slate-500">
-                <span>Recent Community Submissions ({communityReports.length})</span>
+                <span>All Community Submissions ({communityReports.length})</span>
                 <span className="text-[11px] font-semibold text-ocean-700 bg-ocean-50 px-2 py-0.5 rounded">
-                  Moderator Workflow Demo
+                  Open Science Audit Log
                 </span>
               </div>
 
@@ -470,13 +642,7 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="flex items-center gap-2 mb-1">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          report.status === 'verified' 
-                            ? 'bg-teal-100 text-teal-800 border border-teal-200' 
-                            : 'bg-amber-100 text-amber-800 border border-amber-200'
-                        }`}>
-                          {report.status === 'verified' ? 'Verified Audit' : 'Pending Verification'}
-                        </span>
+                        {getStatusBadge(report.status)}
                         <SeverityBadge severity={report.severity} />
                       </div>
                       <h4 className="font-extrabold text-sm text-slate-900">{report.locationName}</h4>
@@ -503,19 +669,21 @@ export const CommunityReportModal: React.FC<CommunityReportModalProps> = ({
                       Estimated: {report.estimatedPieces} items ({report.wasteCategory})
                     </span>
 
-                    {report.status !== 'verified' ? (
+                    {report.status !== 'verified' && isNgo ? (
                       <button
                         onClick={() => verifyCommunityReport(report.id)}
                         className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 transition-colors shadow-sm"
                       >
                         <Check className="w-3.5 h-3.5" />
-                        Verify & Upgrade Rigor
+                        Verify as NGO
                       </button>
                     ) : (
-                      <span className="text-xs font-bold text-teal-700 flex items-center gap-1">
-                        <CheckCircle2 className="w-4 h-4 text-teal-600" />
-                        Verified by AquaWatch
-                      </span>
+                      report.status === 'verified' && (
+                        <span className="text-xs font-bold text-teal-700 flex items-center gap-1">
+                          <CheckCircle2 className="w-4 h-4 text-teal-600" />
+                          Verified Observation
+                        </span>
+                      )
                     )}
                   </div>
                 </div>

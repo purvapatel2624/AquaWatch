@@ -1,13 +1,16 @@
-import React, { createContext, useContext, useState, useMemo } from 'react';
+import React, { createContext, useContext, useState, useMemo, useEffect } from 'react';
 import { 
   PollutionObservation, 
   FilterState, 
   CommunityReport, 
+  CommunityReportStatus,
   SeverityLevel,
   WaterbodyType,
   PlasticWasteCategory 
 } from '../types/pollution';
+import { CleanupDrive } from '../types/auth';
 import { AUTHENTIC_POLLUTION_DATA } from '../data/authenticDatasets';
+import { INITIAL_CLEANUP_DRIVES } from '../data/mockAuthData';
 import { calculateConfidence } from '../utils/confidenceScore';
 
 interface PollutionContextType {
@@ -23,6 +26,16 @@ interface PollutionContextType {
   communityReports: CommunityReport[];
   submitCommunityReport: (report: Omit<CommunityReport, 'id' | 'status' | 'submittedAt'>) => void;
   verifyCommunityReport: (id: string) => void;
+  updateReportStatus: (
+    reportId: string,
+    newStatus: CommunityReportStatus,
+    reviewerName?: string,
+    reviewerId?: string,
+    notes?: string
+  ) => void;
+  cleanupDrives: CleanupDrive[];
+  createCleanupDrive: (drive: Omit<CleanupDrive, 'id' | 'registeredVolunteers' | 'status'>) => void;
+  registerForCleanupDrive: (driveId: string, userEmail: string) => boolean;
   demoMode: boolean;
   setDemoMode: (val: boolean) => void;
   showHotspotsOnly: boolean;
@@ -40,6 +53,72 @@ const initialFilters: FilterState = {
   yearRange: [2018, 2024],
 };
 
+const REPORTS_STORAGE_KEY = 'aquawatch_community_reports_v1';
+const DRIVES_STORAGE_KEY = 'aquawatch_cleanup_drives_v1';
+
+const INITIAL_COMMUNITY_REPORTS: CommunityReport[] = [
+  {
+    id: 'comm-rep-101',
+    userId: 'user-elena-01',
+    locationName: 'Brighton Pier Shingle Beach',
+    waterbodyType: 'beach',
+    coordinates: [50.8166, -0.1372],
+    date: '2024-03-01',
+    time: '14:30',
+    wasteCategory: 'bottles',
+    estimatedPieces: 85,
+    severity: 'Moderate',
+    description: 'Accumulation of plastic bottle caps, broken drink bottles, and disposable coffee cups along the high-tide driftline.',
+    reporterName: 'Elena Rostova',
+    reporterEmail: 'elena.citizen@aquawatch.org',
+    photoUrl: 'https://images.unsplash.com/photo-1618477461853-cf6ed80faba5?w=500&auto=format&fit=crop&q=60',
+    status: 'verified',
+    submittedAt: '2024-03-01T15:00:00Z',
+    reviewedByNgoName: 'Pacific Ocean Cleanup Alliance',
+    reviewNotes: 'Transect audit confirmed. Density matches seasonal tidal accumulation.',
+    updatedAt: '2024-03-02T10:30:00Z',
+  },
+  {
+    id: 'comm-rep-102',
+    userId: 'user-elena-01',
+    locationName: 'Santa Monica Pier Driftline',
+    waterbodyType: 'beach',
+    coordinates: [34.0099, -118.4960],
+    date: '2024-03-10',
+    time: '16:45',
+    wasteCategory: 'packaging',
+    estimatedPieces: 120,
+    severity: 'High',
+    description: 'Dense cluster of fast food containers, polystyrene fragments, and plastic wrappers washed onto the upper dry sand zone after weekend swells.',
+    reporterName: 'Elena Rostova',
+    reporterEmail: 'elena.citizen@aquawatch.org',
+    photoUrl: 'https://images.unsplash.com/photo-1621451537084-482c73073a0f?w=500&auto=format&fit=crop&q=60',
+    status: 'cleanup_scheduled',
+    submittedAt: '2024-03-10T17:15:00Z',
+    reviewedByNgoName: 'Pacific Ocean Cleanup Alliance',
+    reviewNotes: 'Scheduled for upcoming beach volunteer sweep.',
+    updatedAt: '2024-03-11T09:00:00Z',
+  },
+  {
+    id: 'comm-rep-103',
+    userId: 'user-arun-02',
+    locationName: 'Ganges River Ghats, Varanasi',
+    waterbodyType: 'river',
+    coordinates: [25.3176, 82.9739],
+    date: '2024-03-12',
+    time: '09:15',
+    wasteCategory: 'bags',
+    estimatedPieces: 210,
+    severity: 'High',
+    description: 'Thin polyethylene packaging films and polythene shopping bags caught around river edge mooring posts.',
+    reporterName: 'Arun K.',
+    reporterEmail: 'arunk@cleanwater.org',
+    photoUrl: 'https://images.unsplash.com/photo-1605600659873-d808a13e4d2a?w=500&auto=format&fit=crop&q=60',
+    status: 'pending_review',
+    submittedAt: '2024-03-12T10:00:00Z',
+  }
+];
+
 const PollutionContext = createContext<PollutionContextType | undefined>(undefined);
 
 export const PollutionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -50,43 +129,43 @@ export const PollutionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [demoMode, setDemoMode] = useState<boolean>(false);
   const [showHotspotsOnly, setShowHotspotsOnly] = useState<boolean>(false);
 
-  // Initial community reports (transparently labeled)
-  const [communityReports, setCommunityReports] = useState<CommunityReport[]>([
-    {
-      id: 'comm-rep-101',
-      locationName: 'Brighton Pier Shingle Beach',
-      waterbodyType: 'beach',
-      coordinates: [50.8166, -0.1372],
-      date: '2024-03-01',
-      time: '14:30',
-      wasteCategory: 'bottles',
-      estimatedPieces: 85,
-      severity: 'Moderate',
-      description: 'Accumulation of plastic bottle caps, broken drink bottles, and disposable coffee cups along the high-tide driftline.',
-      reporterName: 'Marine Watch Volunteer Club',
-      reporterEmail: 'volunteer@marinewatch.org',
-      photoUrl: 'https://images.unsplash.com/photo-1618477461853-cf6ed80faba5?w=500&auto=format&fit=crop&q=60',
-      status: 'verified',
-      submittedAt: '2024-03-01T15:00:00Z',
-    },
-    {
-      id: 'comm-rep-102',
-      locationName: 'Ganges River Ghats, Varanasi',
-      waterbodyType: 'river',
-      coordinates: [25.3176, 82.9739],
-      date: '2024-03-12',
-      time: '09:15',
-      wasteCategory: 'bags',
-      estimatedPieces: 210,
-      severity: 'High',
-      description: 'Thin polyethylene packaging films and polythene shopping bags caught around river edge mooring posts.',
-      reporterName: 'Arun K.',
-      reporterEmail: 'arunk@cleanwater.org',
-      photoUrl: 'https://images.unsplash.com/photo-1621451537084-482c73073a0f?w=500&auto=format&fit=crop&q=60',
-      status: 'pending_review',
-      submittedAt: '2024-03-12T10:00:00Z',
+  // Community reports with local storage backup
+  const [communityReports, setCommunityReports] = useState<CommunityReport[]>(() => {
+    try {
+      const stored = localStorage.getItem(REPORTS_STORAGE_KEY);
+      if (stored) return JSON.parse(stored);
+    } catch (e) {
+      console.error(e);
     }
-  ]);
+    return INITIAL_COMMUNITY_REPORTS;
+  });
+
+  // Cleanup drives with local storage backup
+  const [cleanupDrives, setCleanupDrives] = useState<CleanupDrive[]>(() => {
+    try {
+      const stored = localStorage.getItem(DRIVES_STORAGE_KEY);
+      if (stored) return JSON.parse(stored);
+    } catch (e) {
+      console.error(e);
+    }
+    return INITIAL_CLEANUP_DRIVES;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(communityReports));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [communityReports]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DRIVES_STORAGE_KEY, JSON.stringify(cleanupDrives));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [cleanupDrives]);
 
   const resetFilters = () => {
     setFilters(initialFilters);
@@ -138,23 +217,76 @@ export const PollutionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const verifyCommunityReport = (id: string) => {
+    updateReportStatus(id, 'verified', 'AquaWatch Regional Moderator', undefined, 'Verified community audit');
+  };
+
+  const updateReportStatus = (
+    reportId: string,
+    newStatus: CommunityReportStatus,
+    reviewerName?: string,
+    reviewerId?: string,
+    notes?: string
+  ) => {
+    const updatedAt = new Date().toISOString();
+
     setCommunityReports(prev => prev.map(rep => {
-      if (rep.id === id) {
-        return { ...rep, status: 'verified' as const };
+      if (rep.id === reportId) {
+        return {
+          ...rep,
+          status: newStatus,
+          reviewedByNgoName: reviewerName || rep.reviewedByNgoName,
+          reviewedByNgoId: reviewerId || rep.reviewedByNgoId,
+          reviewNotes: notes !== undefined ? notes : rep.reviewNotes,
+          updatedAt,
+        };
       }
       return rep;
     }));
 
+    // Update corresponding observation if present
     setObservations(prev => prev.map(obs => {
-      if (obs.id === id) {
+      if (obs.id === reportId) {
+        const isVerified = newStatus === 'verified' || newStatus === 'cleanup_scheduled' || newStatus === 'resolved';
         return {
           ...obs,
-          provenance: 'community_verified' as const,
-          confidence: calculateConfidence('community_verified', obs.reportedDate, 'Verified community audit'),
+          provenance: isVerified ? 'community_verified' : 'community_unverified',
+          confidence: calculateConfidence(
+            isVerified ? 'community_verified' : 'community_unverified', 
+            obs.reportedDate, 
+            isVerified ? 'Verified by accredited environmental NGO' : 'Pending review'
+          ),
         };
       }
       return obs;
     }));
+  };
+
+  const createCleanupDrive = (driveData: Omit<CleanupDrive, 'id' | 'registeredVolunteers' | 'status'>) => {
+    const newDrive: CleanupDrive = {
+      ...driveData,
+      id: `drive-${Date.now()}`,
+      registeredVolunteers: [],
+      status: 'upcoming',
+    };
+    setCleanupDrives(prev => [newDrive, ...prev]);
+  };
+
+  const registerForCleanupDrive = (driveId: string, userEmail: string): boolean => {
+    let alreadyRegistered = false;
+    setCleanupDrives(prev => prev.map(d => {
+      if (d.id === driveId) {
+        if (d.registeredVolunteers.includes(userEmail)) {
+          alreadyRegistered = true;
+          return d;
+        }
+        return {
+          ...d,
+          registeredVolunteers: [...d.registeredVolunteers, userEmail]
+        };
+      }
+      return d;
+    }));
+    return !alreadyRegistered;
   };
 
   // Filtered observations
@@ -237,6 +369,10 @@ export const PollutionProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         communityReports,
         submitCommunityReport,
         verifyCommunityReport,
+        updateReportStatus,
+        cleanupDrives,
+        createCleanupDrive,
+        registerForCleanupDrive,
         demoMode,
         setDemoMode,
         showHotspotsOnly,
